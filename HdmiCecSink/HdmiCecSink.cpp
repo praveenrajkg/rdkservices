@@ -2911,7 +2911,11 @@ namespace WPEFramework
             return;
 
              LOGINFO("Current ARC State : %d\n", m_currentArcRoutingState);
-
+             if( m_currentArcRoutingState == ARC_STATE_ARC_INITIATED )
+             {
+                     LOGINFO("Current ARC State is %d which means ARC has been Initiated already\n", m_currentArcRoutingState);
+                     return;
+             }
 	    _instance->requestArcInitiation();
  
           // start initiate ARC timer 3 sec
