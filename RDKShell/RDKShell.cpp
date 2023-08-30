@@ -211,6 +211,13 @@ enum RDKShellLaunchType
     RESUME
 };
 
+enum AppLastExitReason
+{
+    UNDEFINED = 0,
+    CRASH,
+    DEACTIVATED
+};
+
 FactoryAppLaunchStatus sFactoryAppLaunchStatus = NOTLAUNCHED;
 
 namespace WPEFramework {
@@ -384,6 +391,7 @@ namespace WPEFramework {
         std::vector<RDKShellStartupConfig> gStartupConfigs;
         std::map<std::string, bool> gDestroyApplications;
         std::map<std::string, bool> gLaunchApplications;
+        std::map<std::string, AppLastExitReason> gApplicationsExitReason;
         
         uint32_t getKeyFlag(std::string modifier)
         {
@@ -412,6 +420,7 @@ namespace WPEFramework {
         std::mutex gDestroyMutex;
 
         std::mutex gLaunchMutex;
+        std::mutex gExitReasonMutex;
         int32_t gLaunchCount = 0;
 
         static std::thread shellThread;
@@ -600,6 +609,18 @@ namespace WPEFramework {
             if (service)
             {
                 PluginHost::IShell::state currentState(service->State());
+
+                gExitReasonMutex.lock();
+                if ((currentState == PluginHost::IShell::DEACTIVATED) || (currentState == PluginHost::IShell::DESTROYED))
+                {
+                     gApplicationsExitReason[service->Callsign()] = AppLastExitReason::DEACTIVATED;
+                }
+                if(service->Reason() == PluginHost::IShell::FAILURE)
+                {
+                    gApplicationsExitReason[service->Callsign()] = AppLastExitReason::CRASH;
+                }
+                gExitReasonMutex.unlock();
+
                 if (currentState == PluginHost::IShell::ACTIVATION)
                 {
                    std::string configLine = service->ConfigLine();
@@ -3365,7 +3386,7 @@ namespace WPEFramework {
                 }
 
                 // One RFC controls all WPE-based apps
-                if (!type.empty() && (type == "HtmlApp" || type == "LightningApp" || type == "SearchAndDiscoveryApp" ))
+                if (!type.empty() && (type == "HtmlApp" || type == "LightningApp"))
                 {
 #ifdef RFC_ENABLED
                     RFC_ParamData_t param;
@@ -3389,6 +3410,36 @@ namespace WPEFramework {
                     else
                     {
                         std::cout << "reading dobby WPE rfc failed - launching " << type << " in default mode" << std::endl;
+                    }
+#else
+                    std::cout << "rfc is disabled and unable to check for " << type << " container mode " << std::endl;
+#endif
+                }
+
+                if (!type.empty() && type == "SearchAndDiscoveryApp" )
+                {
+#ifdef RFC_ENABLED
+                    RFC_ParamData_t param;
+                    if (Utils::getRFCConfig("Device.DeviceInfo.X_RDKCENTRAL-COM_RFC.Feature.Dobby.SAD.Enable", param))
+                    {
+                        JsonObject root;
+                        if (strncasecmp(param.value, "true", 4) == 0)
+                        {
+                            std::cout << "dobby SAD rfc true - launching " << type << " in container mode " << std::endl;
+                            root = configSet["root"].Object();
+                            root["mode"] = JsonValue("Container");
+                        }
+                        else
+                        {
+                            std::cout << "dobby SAD rfc false - launching " << type << " in out-of-process mode " << std::endl;
+                            root = configSet["root"].Object();
+                            root["outofprocess"] = JsonValue(true);
+                        }
+                        configSet["root"] = root;
+                    }
+                    else
+                    {
+                        std::cout << "reading dobby SAD rfc failed - launching " << type << " in default mode" << std::endl;
                     }
 #else
                     std::cout << "rfc is disabled and unable to check for " << type << " container mode " << std::endl;
@@ -4318,6 +4369,17 @@ namespace WPEFramework {
                                 {
                                     typeObject["uri"] = "";
                                 }
+                                gExitReasonMutex.lock();
+                                if (gApplicationsExitReason.find(callsign) != gApplicationsExitReason.end())
+                                {
+                                    typeObject["lastExitReason"] = (int)gApplicationsExitReason[callsign];
+                                }
+                                else
+                                {
+                                    typeObject["lastExitReason"] = (int)AppLastExitReason::UNDEFINED;
+                                }
+                                gExitReasonMutex.unlock();
+
                                 stateArray.Add(typeObject);
                             }
                         }
